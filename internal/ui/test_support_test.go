@@ -62,7 +62,7 @@ func (s *fakeUserStorer) UpdateUser(user *model.User) error {
 }
 
 func (s *fakeUserStorer) RemoveUser(id string) error {
-	delete(s.users, model.NormalizeUserID(id))
+	delete(s.users, id)
 	return nil
 }
 

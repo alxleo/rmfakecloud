@@ -44,6 +44,7 @@ To be able to send email from your reMarkable, fill the following variables:
 ## OIDC authentication
 
 To use OpenID Connect for login, fill the following variables. `RM_HTTPS_COOKIE=true` is also required.
+The issuer and the authorization, token, and JWKS endpoints advertised by discovery must all use HTTPS.
 
 | Variable name | Description |
 |---|---|
@@ -51,13 +52,13 @@ To use OpenID Connect for login, fill the following variables. `RM_HTTPS_COOKIE=
 | `OIDC_CLIENT_ID` | OAuth2 client ID |
 | `OIDC_CLIENT_SECRET` | OAuth2 client secret |
 | `OIDC_REDIRECT_URL` | Callback URL, must end with `/ui/api/oidc/callback`. Example: `https://your-domain.com/ui/api/oidc/callback` |
-| `OIDC_USERID_CLAIM` | Optional: OIDC claim to use as the user ID (default: `preferred_username`). Supports `preferred_username`, `sub`, `email`, other string claims, and dotted paths such as `custom.userid`. If the configured claim is empty, login falls back to `email`. Whenever the actual identifier is `email`, email verification is enforced unless `OIDC_ALLOW_UNVERIFIED_EMAIL=true`. |
+| `OIDC_USERID_CLAIM` | Optional: OIDC claim to use as the user ID (default: `preferred_username`). Supports `preferred_username`, `sub`, `email`, other string claims, and dotted paths such as `custom.userid`. The configured claim is authoritative: a missing, empty, or unsafe value rejects login rather than falling back to another claim. Whenever the actual identifier is `email`, email verification is enforced unless `OIDC_ALLOW_UNVERIFIED_EMAIL=true`. |
 | `OIDC_DISABLE_LOCAL_LOGIN` | Optional: set to `true` to hide the password form, disable the registration endpoint, and auto-redirect `/login` to OIDC. This requires OIDC for all users (default: `false`). When enabled, users visit the login page and are immediately redirected to your OIDC provider. |
 | `OIDC_ADMIN_CLAIM` | Optional: dotted path to the claim that holds admin role values (e.g. `groups`). If unset, no OIDC user is granted admin. The claim is read from the ID token — see `OIDC_EXTRA_SCOPES` if your provider requires a scope to include it. |
 | `OIDC_ADMIN_CLAIM_VALUE` | Optional: value in that claim that grants admin (e.g. `admin`). Re-evaluated on every login. If unset, no OIDC user is granted admin. |
 | `OIDC_EXTRA_SCOPES` | Optional: space-separated extra OAuth2 scopes. `openid`, `email`, and `profile` are always requested (default: none). Use this if your provider requires a scope to include role claims in the ID token (e.g. `groups` for Okta). |
 | `OIDC_DISPLAY_NAME` | Optional: custom label for the OIDC login button (default: `Login with OIDC`) |
-| `OIDC_ALLOW_UNVERIFIED_EMAIL` | Optional: set to `true` to allow login when the provider's `email_verified` claim is missing or `false`. Leave unset for the secure default — logins with an unverified email are rejected to prevent account takeover via an unverified address. Applies whenever the actual user ID is `email`, including fallback from another claim (default: `false`). |
+| `OIDC_ALLOW_UNVERIFIED_EMAIL` | Optional: set to `true` to allow login when the provider's `email_verified` claim is missing or `false`. Leave unset for the secure default — logins with an unverified email are rejected to prevent account takeover via an unverified address. Applies whenever the configured user ID claim is `email` (default: `false`). |
 
 ### Provider examples
 

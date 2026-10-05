@@ -26,9 +26,10 @@ import (
 )
 
 const (
-	userIDKey      = "UserID"
-	deviceIDKey    = "DeviceID"
-	syncVersionKey = "SyncVersion"
+	userIDKey        = "UserID"
+	deviceIDKey      = "DeviceID"
+	syncVersionKey   = "SyncVersion"
+	oidcCallbackPath = "/ui/api/oidc/callback"
 )
 
 // App web app
@@ -116,7 +117,6 @@ func (app *App) Stop() {
 	}
 }
 
-
 // NewApp constructs an app
 func NewApp(cfg *config.Config) App {
 	debugMode := log.GetLevel() >= log.DebugLevel
@@ -139,7 +139,7 @@ func NewApp(cfg *config.Config) App {
 	ntfHub := hub.NewHub()
 	pcStore := passcodestore.NewInMemory()
 	codeConnector := NewCodeConnector()
-	router := gin.Default()
+	router := newRouter(debugMode)
 
 	// corsConfig := cors.DefaultConfig()
 
@@ -154,10 +154,6 @@ func NewApp(cfg *config.Config) App {
 
 	// Register the middleware
 	// router.Use(cors.New(corsConfig))
-
-	if debugMode {
-		router.Use(requestLoggerMiddleware())
-	}
 
 	app := App{
 		router:        router,
@@ -187,6 +183,18 @@ func NewApp(cfg *config.Config) App {
 	storageapp.RegisterRoutes(router)
 
 	return app
+}
+
+func newRouter(debugMode bool) *gin.Engine {
+	router := gin.New()
+	router.Use(
+		gin.LoggerWithConfig(gin.LoggerConfig{SkipPaths: []string{oidcCallbackPath}}),
+		gin.Recovery(),
+	)
+	if debugMode {
+		router.Use(requestLoggerMiddleware())
+	}
+	return router
 }
 
 func badReq(c *gin.Context, message string) {

@@ -1,11 +1,11 @@
 package ui
 
 import (
-	"context"
 	"io"
 	"io/fs"
 	"net/http"
 	"path"
+	"sync"
 	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
@@ -20,7 +20,6 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	webui "github.com/ddvk/rmfakecloud/ui"
 	"github.com/gin-gonic/gin"
-	log "github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
 
@@ -71,18 +70,20 @@ type mqttBridge interface {
 
 // ReactAppWrapper encapsulates an app
 type ReactAppWrapper struct {
-	fs            http.FileSystem
-	prefix        string
-	cfg           *config.Config
-	userStorer    storage.UserStorer
-	codeConnector codeGenerator
-	h             *hub.Hub
-	passcodeStore passcodestore.Store
-	backends      map[common.SyncVersion]backend
-	roomManager   *screenshare.RoomManager
-	mqtt          mqttBridge
-	oidcProvider *gooidc.Provider
-	oauth2Config oauth2.Config
+	fs             http.FileSystem
+	prefix         string
+	cfg            *config.Config
+	userStorer     storage.UserStorer
+	codeConnector  codeGenerator
+	h              *hub.Hub
+	passcodeStore  passcodestore.Store
+	backends       map[common.SyncVersion]backend
+	roomManager    *screenshare.RoomManager
+	mqtt           mqttBridge
+	oidcProvider   *gooidc.Provider
+	oauth2Config   oauth2.Config
+	oidcHTTPClient *http.Client
+	oidcMu         sync.RWMutex
 }
 
 // hack for serving index.html on /
@@ -126,22 +127,6 @@ func New(cfg *config.Config,
 		},
 		roomManager: roomManager,
 		mqtt:        mqttBroker,
-	}
-
-	if cfg.OIDC.Enabled() {
-		provider, err := gooidc.NewProvider(context.Background(), cfg.OIDC.ProviderURL)
-		if err != nil {
-			log.Fatalf("OIDC: failed to discover provider %s: %v", cfg.OIDC.ProviderURL, err)
-		}
-		staticWrapper.oidcProvider = provider
-		staticWrapper.oauth2Config = oauth2.Config{
-			ClientID:     cfg.OIDC.ClientID,
-			ClientSecret: cfg.OIDC.ClientSecret,
-			RedirectURL:  cfg.OIDC.RedirectURL,
-			Endpoint:     provider.Endpoint(),
-			Scopes:       cfg.OIDC.Scopes(),
-		}
-		log.Info("OIDC provider initialized: ", cfg.OIDC.ProviderURL)
 	}
 
 	return &staticWrapper

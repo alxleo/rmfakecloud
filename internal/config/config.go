@@ -97,6 +97,7 @@ const (
 	EnvOIDCAllowUnverifiedEmail = "OIDC_ALLOW_UNVERIFIED_EMAIL"
 	EnvOIDCDisableLocalLogin    = "OIDC_DISABLE_LOCAL_LOGIN"
 	DefaultOIDCUserIDClaim      = "preferred_username"
+	DefaultOIDCDisplayName      = "Login with OIDC"
 )
 
 // Config config
@@ -152,6 +153,14 @@ func (o *OIDCConfig) Enabled() bool {
 // an incomplete or disabled OIDC configuration can never lock out all login.
 func (o *OIDCConfig) LocalLoginEnabled() bool {
 	return !o.Enabled() || !o.DisableLocalLogin
+}
+
+// LoginDisplayName returns the configured public label for the OIDC button.
+func (o *OIDCConfig) LoginDisplayName() string {
+	if o.DisplayName != "" {
+		return o.DisplayName
+	}
+	return DefaultOIDCDisplayName
 }
 
 // partiallyConfigured detects any OIDC env var set without the full required set.

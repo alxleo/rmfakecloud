@@ -13,6 +13,17 @@ class ApiServices {
       }).then(handleError);
     }
   }
+  authConfig() {
+    return fetch(`${constants.ROOT_URL}/auth/config`, {
+      method: "GET",
+      headers: this.header(),
+    }).then((r) => {
+      if (!r.ok) {
+        throw new Error(r.statusText);
+      }
+      return r.json();
+    });
+  }
   login(loginData) {
     return fetch(`${constants.ROOT_URL}/login`, {
       method: "POST",

@@ -3,6 +3,7 @@ package ui
 import (
 	"errors"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -74,7 +75,7 @@ func TestOIDCProvisioningOccursWhenRegistrationIsOpen(t *testing.T) {
 	}
 }
 
-func TestOIDCProvisioningStoresTheNormalizedHyphenatedKey(t *testing.T) {
+func TestOIDCProvisioningPreservesTheHyphenatedKey(t *testing.T) {
 	storer := newFakeUserStorer()
 	app := testUIApp(&config.Config{
 		OIDC:             oidcOn(),
@@ -82,16 +83,16 @@ func TestOIDCProvisioningStoresTheNormalizedHyphenatedKey(t *testing.T) {
 	}, storer)
 	identity := oidcUserIdentity{Value: "Jean-Luc", ClaimName: "preferred_username"}
 
-	user, err := app.getOrProvisionUser("jean-luc", identity, oidcClaims{}, nil)
+	user, err := app.getOrProvisionUser("Jean-Luc", identity, oidcClaims{}, nil)
 
 	if err != nil {
 		t.Fatalf("hyphenated OIDC identity was rejected: %v", err)
 	}
-	if user.ID != "jean-luc" {
-		t.Fatalf("provisioned ID = %q, want jean-luc", user.ID)
+	if user.ID != "Jean-Luc" {
+		t.Fatalf("provisioned ID = %q, want Jean-Luc", user.ID)
 	}
-	if got, err := storer.GetUser("jean-luc"); err != nil || got != user {
-		t.Fatalf("normalized filesystem key was not stored: user=%#v err=%v", got, err)
+	if got, err := storer.GetUser("Jean-Luc"); err != nil || got != user {
+		t.Fatalf("exact filesystem key was not stored: user=%#v err=%v", got, err)
 	}
 }
 
@@ -103,7 +104,7 @@ func TestOIDCExistingAdminRemainsUsableWhenRegistrationIsClosed(t *testing.T) {
 	user.IsAdmin = true
 	storer := newFakeUserStorer(user)
 	app := testUIApp(&config.Config{OIDC: oidcOn(), HTTPSCookie: true}, storer)
-	identity := oidcUserIdentity{Value: "Alex", ClaimName: "preferred_username"}
+	identity := oidcUserIdentity{Value: "alex", ClaimName: "preferred_username"}
 
 	got, err := app.getOrProvisionUser("alex", identity, oidcClaims{}, nil)
 
@@ -147,5 +148,77 @@ func TestNativePasswordLoginPreservesMixedCaseUserAndReturnsToken(t *testing.T) 
 	}
 	if claims.UserID != user.ID {
 		t.Fatalf("native token user ID = %q, want %q", claims.UserID, user.ID)
+	}
+}
+
+func TestOIDCIdentityClaimIsExactAndAuthoritative(t *testing.T) {
+	app := testUIApp(&config.Config{OIDC: oidcOn()}, newFakeUserStorer())
+
+	identity, err := app.resolveOIDCIdentity(map[string]any{"preferred_username": "MiXeD-User"}, oidcClaims{})
+	if err != nil {
+		t.Fatalf("exact identity rejected: %v", err)
+	}
+	if identity.Value != "MiXeD-User" {
+		t.Fatalf("identity was rewritten to %q", identity.Value)
+	}
+
+	if _, err := app.resolveOIDCIdentity(map[string]any{"email": "alex@example.com"}, oidcClaims{Email: "alex@example.com"}); !errors.Is(err, errNoUserID) {
+		t.Fatalf("missing configured claim fell back to email: %v", err)
+	}
+	for _, value := range []string{" MiXeD", "MiXeD ", ".", "..", "alice/bob", "alice!bob"} {
+		if _, err := app.resolveOIDCIdentity(map[string]any{"preferred_username": value}, oidcClaims{}); !errors.Is(err, errInvalidUserID) {
+			t.Errorf("identity %q returned %v, want errInvalidUserID", value, err)
+		}
+	}
+}
+
+func TestNativeCookieJarLogoutRemovesWebSession(t *testing.T) {
+	user, err := model.NewUser("alex", "hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	storer := newFakeUserStorer(user)
+	app := testUIApp(&config.Config{JWTSecretKey: []byte("test-secret")}, storer)
+	server := httptest.NewServer(routerForUIApp(t, app))
+	defer server.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	response, err := client.Post(server.URL+"/ui/api/login", "application/json", strings.NewReader(`{"email":"alex","password":"hunter2"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("login returned %d, want 200", response.StatusCode)
+	}
+
+	response, err = client.Get(server.URL + "/ui/api/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated /me returned %d, want 200", response.StatusCode)
+	}
+
+	response, err = client.Get(server.URL + "/ui/api/logout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("logout returned %d, want 200", response.StatusCode)
+	}
+	response, err = client.Get(server.URL + "/ui/api/me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("post-logout /me returned %d, want 401", response.StatusCode)
 	}
 }

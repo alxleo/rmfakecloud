@@ -44,6 +44,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	})
 
 	r := router.Group("/ui/api")
+	r.GET("auth/config", app.authConfigHandler)
 	if app.cfg.OIDC.Enabled() {
 		r.GET("oidc/login", app.oidcBegin)
 		r.GET("oidc/callback", app.oidcCallback)

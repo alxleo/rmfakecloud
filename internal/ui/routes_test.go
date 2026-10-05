@@ -79,3 +79,46 @@ func TestOIDCDisabledKeepsNativeLoginRoutes(t *testing.T) {
 		t.Fatal("native login route was not registered when OIDC is disabled")
 	}
 }
+
+func TestPublicAuthConfigExposesOnlyLoginChoices(t *testing.T) {
+	cfg := uiRouteConfig()
+	cfg.OIDC.DisplayName = "Login with Authentik"
+	app := testUIApp(cfg, newFakeUserStorer())
+	router := routerForUIApp(t, app)
+
+	response := requestUI(t, router, http.MethodGet, "/ui/api/auth/config", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("auth config returned %d, want 200", response.Code)
+	}
+	body := response.Body.String()
+	for _, expected := range []string{"\"oidc_enabled\":true", "\"oidc_login_url\":\"/ui/api/oidc/login\"", "\"oidc_display_name\":\"Login with Authentik\"", "\"local_login_enabled\":true"} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("auth config omitted %s: %s", expected, body)
+		}
+	}
+	for _, forbidden := range []string{"client-secret", "sso.example.com"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("auth config leaked %s: %s", forbidden, body)
+		}
+	}
+}
+
+func TestOIDCProviderFailureIsRequestScoped(t *testing.T) {
+	cfg := uiRouteConfig()
+	cfg.OIDC.ProviderURL = "https://127.0.0.1:1"
+	app := testUIApp(cfg, newFakeUserStorer())
+	router := routerForUIApp(t, app)
+
+	response := requestUI(t, router, http.MethodGet, "/ui/api/oidc/login", nil)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("provider failure returned %d, want 503", response.Code)
+	}
+	response = requestUI(t, router, http.MethodGet, "/ui/api/auth/config", nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("native UI stopped responding after provider failure: %d", response.Code)
+	}
+	response = requestUI(t, router, http.MethodPost, "/ui/api/login", nil)
+	if response.Code == http.StatusNotFound {
+		t.Fatal("native login route disappeared after provider failure")
+	}
+}

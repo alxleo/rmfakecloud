@@ -6,9 +6,13 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"time"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/ddvk/rmfakecloud/internal/model"
@@ -22,6 +26,7 @@ const (
 	oidcNonceCookie    = "oidc_nonce"
 	oidcVerifierCookie = "oidc_pkce_verifier"
 	oidcCookieMaxAge   = 300
+	oidcRequestTimeout = 10 * time.Second
 	// oidcSuccessPath is the frontend route the callback redirects to on success.
 	// The frontend must register a matching <Route path="/oidc-success"> to handle it.
 	oidcSuccessPath = "/oidc-success"
@@ -29,9 +34,19 @@ const (
 
 var (
 	errNoUserID               = errors.New("no userid available: configured claim not found or empty")
+	errInvalidUserID          = errors.New("invalid userid claim")
 	errEmailNotVerified       = errors.New("email not verified")
 	errOIDCRegistrationClosed = errors.New("OIDC registration closed")
 )
+
+var oidcIdentityPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@._+%-]*$`)
+
+type oidcDiscoveryMetadata struct {
+	Issuer                string `json:"issuer"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	JWKSURI               string `json:"jwks_uri"`
+}
 
 type oidcUserIdentity struct {
 	Value     string
@@ -39,15 +54,118 @@ type oidcUserIdentity struct {
 }
 
 func newOIDCUserIdentity(value, claimName string) oidcUserIdentity {
-	if claimName == "email" {
-		// Email identities must compare case-insensitively so repeated logins resolve to the same user.
-		value = strings.ToLower(value)
-	}
 	return oidcUserIdentity{Value: value, ClaimName: claimName}
 }
 
 func (identity oidcUserIdentity) usesEmail() bool {
 	return identity.ClaimName == "email"
+}
+
+func requireOIDCHTTPSURL(raw, field string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+		return fmt.Errorf("oidc %s must be an https URL", field)
+	}
+	return nil
+}
+
+func validateOIDCDiscovery(provider *gooidc.Provider, issuer string) error {
+	if err := requireOIDCHTTPSURL(issuer, "issuer"); err != nil {
+		return err
+	}
+	var metadata oidcDiscoveryMetadata
+	if err := provider.Claims(&metadata); err != nil {
+		return errors.New("oidc discovery metadata unavailable")
+	}
+	if metadata.Issuer != issuer {
+		return errors.New("oidc discovery issuer mismatch")
+	}
+	for field, endpoint := range map[string]string{
+		"authorization endpoint": metadata.AuthorizationEndpoint,
+		"token endpoint":         metadata.TokenEndpoint,
+		"jwks endpoint":          metadata.JWKSURI,
+	} {
+		if err := requireOIDCHTTPSURL(endpoint, field); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (app *ReactAppWrapper) oidcHTTPClientForRequest() *http.Client {
+	app.oidcMu.RLock()
+	client := app.oidcHTTPClient
+	app.oidcMu.RUnlock()
+	if client == nil {
+		client = &http.Client{Timeout: oidcRequestTimeout}
+	}
+	copy := *client
+	previousRedirect := copy.CheckRedirect
+	copy.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return errors.New("oidc redirect must use https")
+		}
+		if previousRedirect != nil {
+			return previousRedirect(req, via)
+		}
+		return nil
+	}
+	return &copy
+}
+
+// ensureOIDCProvider discovers the provider on the first OIDC request. Discovery
+// is deliberately outside New so an IdP outage cannot prevent native APIs from
+// starting. Both discovery and subsequent token/JWKS calls use the bounded client.
+func (app *ReactAppWrapper) ensureOIDCProvider(ctx context.Context) (*gooidc.Provider, oauth2.Config, error) {
+	if !app.cfg.OIDC.Enabled() {
+		return nil, oauth2.Config{}, errors.New("oidc is not configured")
+	}
+
+	app.oidcMu.RLock()
+	provider := app.oidcProvider
+	config := app.oauth2Config
+	app.oidcMu.RUnlock()
+	if provider != nil {
+		return provider, config, nil
+	}
+
+	client := app.oidcHTTPClientForRequest()
+	app.oidcMu.Lock()
+	defer app.oidcMu.Unlock()
+	if app.oidcProvider != nil {
+		return app.oidcProvider, app.oauth2Config, nil
+	}
+	if err := requireOIDCHTTPSURL(app.cfg.OIDC.ProviderURL, "issuer"); err != nil {
+		return nil, oauth2.Config{}, errors.New("oidc provider discovery rejected")
+	}
+
+	discoveryCtx, cancel := context.WithTimeout(ctx, oidcRequestTimeout)
+	defer cancel()
+	discoveryCtx = gooidc.ClientContext(discoveryCtx, client)
+	discovered, err := gooidc.NewProvider(discoveryCtx, app.cfg.OIDC.ProviderURL)
+	if err != nil {
+		return nil, oauth2.Config{}, errors.New("oidc provider discovery failed")
+	}
+	if err := validateOIDCDiscovery(discovered, app.cfg.OIDC.ProviderURL); err != nil {
+		return nil, oauth2.Config{}, errors.New("oidc provider discovery rejected")
+	}
+
+	app.oidcProvider = discovered
+	app.oauth2Config = oauth2.Config{
+		ClientID:     app.cfg.OIDC.ClientID,
+		ClientSecret: app.cfg.OIDC.ClientSecret,
+		RedirectURL:  app.cfg.OIDC.RedirectURL,
+		Endpoint:     discovered.Endpoint(),
+		Scopes:       app.cfg.OIDC.Scopes(),
+	}
+	return app.oidcProvider, app.oauth2Config, nil
+}
+
+func validateOIDCIdentityValue(value string) error {
+	if value == "" || strings.TrimSpace(value) != value || value == "." || value == ".." || !oidcIdentityPattern.MatchString(value) {
+		return errInvalidUserID
+	}
+	return nil
 }
 
 // oidcClaims holds the standard OIDC claims read from the ID token.
@@ -137,21 +255,27 @@ func claimIsTrue(value any) bool {
 
 // oidcBegin starts the OIDC authorization code flow with PKCE, state, and nonce.
 func (app *ReactAppWrapper) oidcBegin(c *gin.Context) {
+	_, oauthConfig, err := app.ensureOIDCProvider(c.Request.Context())
+	if err != nil {
+		log.Warn("[oidc] provider unavailable during login")
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "identity provider unavailable"})
+		return
+	}
 	state, err := randomURLSafeString(32)
 	if err != nil {
-		log.Error("[oidc] failed to generate state: ", err)
+		log.Error("[oidc] failed to generate state")
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 	nonce, err := randomURLSafeString(32)
 	if err != nil {
-		log.Error("[oidc] failed to generate nonce: ", err)
+		log.Error("[oidc] failed to generate nonce")
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
 	pkceVerifier, err := randomURLSafeString(32)
 	if err != nil {
-		log.Error("[oidc] failed to generate PKCE verifier: ", err)
+		log.Error("[oidc] failed to generate PKCE verifier")
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
@@ -160,7 +284,7 @@ func (app *ReactAppWrapper) oidcBegin(c *gin.Context) {
 	app.setOIDCCookie(c, oidcNonceCookie, nonce)
 	app.setOIDCCookie(c, oidcVerifierCookie, pkceVerifier)
 
-	authURL := app.oauth2Config.AuthCodeURL(
+	authURL := oauthConfig.AuthCodeURL(
 		state,
 		gooidc.Nonce(nonce),
 		oauth2.S256ChallengeOption(pkceVerifier),
@@ -172,10 +296,20 @@ func (app *ReactAppWrapper) oidcBegin(c *gin.Context) {
 // Returns the raw claims map (for configurable dotted-path lookups), a typed oidcClaims
 // struct (for standard fields), and true on success; false on error (caller already got an HTTP response).
 func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.Context, code, pkceVerifier string) (map[string]any, oidcClaims, bool) {
-	// Exchange authorization code for tokens, presenting the PKCE verifier
-	oauth2Token, err := app.oauth2Config.Exchange(ctx, code, oauth2.VerifierOption(pkceVerifier))
+	provider, oauthConfig, err := app.ensureOIDCProvider(ctx)
 	if err != nil {
-		log.Error("[oidc] token exchange failed: ", err)
+		log.Warn("[oidc] provider unavailable during callback")
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "identity provider unavailable"})
+		return nil, oidcClaims{}, false
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, oidcRequestTimeout)
+	defer cancel()
+	requestCtx = gooidc.ClientContext(requestCtx, app.oidcHTTPClientForRequest())
+
+	// Exchange authorization code for tokens, presenting the PKCE verifier
+	oauth2Token, err := oauthConfig.Exchange(requestCtx, code, oauth2.VerifierOption(pkceVerifier))
+	if err != nil {
+		log.Warn("[oidc] token exchange failed")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token exchange failed"})
 		return nil, oidcClaims{}, false
 	}
@@ -188,10 +322,10 @@ func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.C
 	}
 
 	// Verify ID token signature, expiry, issuer, and audience
-	idTokenVerifier := app.oidcProvider.Verifier(&gooidc.Config{ClientID: app.cfg.OIDC.ClientID})
-	idToken, err := idTokenVerifier.Verify(ctx, rawIDToken)
+	idTokenVerifier := provider.VerifierContext(requestCtx, &gooidc.Config{ClientID: app.cfg.OIDC.ClientID})
+	idToken, err := idTokenVerifier.Verify(requestCtx, rawIDToken)
 	if err != nil {
-		log.Warn("[oidc] ID token verification failed: ", err)
+		log.Warn("[oidc] ID token verification failed")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "ID token verification failed"})
 		return nil, oidcClaims{}, false
 	}
@@ -199,7 +333,7 @@ func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.C
 	// Deserialize into typed struct for standard fields
 	var claims oidcClaims
 	if err := idToken.Claims(&claims); err != nil {
-		log.Error("[oidc] failed to extract typed claims: ", err)
+		log.Error("[oidc] failed to extract typed claims")
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return nil, oidcClaims{}, false
 	}
@@ -208,7 +342,7 @@ func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.C
 	// Deserialize into raw map for configurable dotted-path claim lookups
 	var rawClaims map[string]any
 	if err := idToken.Claims(&rawClaims); err != nil {
-		log.Error("[oidc] failed to extract raw claims: ", err)
+		log.Error("[oidc] failed to extract raw claims")
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return nil, oidcClaims{}, false
 	}
@@ -216,28 +350,22 @@ func (app *ReactAppWrapper) exchangeAndVerifyToken(c *gin.Context, ctx context.C
 	return rawClaims, claims, true
 }
 
-// resolveOIDCIdentity extracts and validates the user identity from OIDC claims.
-// It tries the configured claim first (using the raw map for dotted-path support),
-// falls back to the typed email claim if not found, then enforces email verification
-// when the identity is email-based.
-// cfg.OIDCUserIDClaim is always non-empty (FromEnv applies the default).
+// resolveOIDCIdentity extracts and validates the user identity from the configured
+// claim. The claim is authoritative: falling back to email would let a provider
+// silently map a missing identity claim onto another local account.
 func (app *ReactAppWrapper) resolveOIDCIdentity(rawClaims map[string]any, claims oidcClaims) (oidcUserIdentity, error) {
 	userIDClaimName := app.cfg.OIDC.UserIDClaim
+	if userIDClaimName == "" {
+		userIDClaimName = "preferred_username"
+	}
 
 	// Try to extract the configured claim (may be a dotted path like "realm_access.roles")
 	if claimVal, ok := extractClaimPath(rawClaims, userIDClaimName); ok {
 		if strVal, ok := claimVal.(string); ok {
-			if userIDValue := strings.TrimSpace(strVal); userIDValue != "" {
-				identity := newOIDCUserIdentity(userIDValue, userIDClaimName)
-				return identity, app.validateEmailIdentity(identity, claims)
+			identity := newOIDCUserIdentity(strVal, userIDClaimName)
+			if err := validateOIDCIdentityValue(strVal); err != nil {
+				return identity, err
 			}
-		}
-	}
-
-	// If the primary claim does not yield a userid, fall back to the email claim.
-	if userIDClaimName != "email" {
-		if userIDValue := strings.TrimSpace(claims.Email); userIDValue != "" {
-			identity := newOIDCUserIdentity(userIDValue, "email")
 			return identity, app.validateEmailIdentity(identity, claims)
 		}
 	}
@@ -273,13 +401,13 @@ func (app *ReactAppWrapper) evaluateOIDCAdminStatus(rawClaims map[string]any) *b
 func (app *ReactAppWrapper) provisionNewUser(userKey string, claims oidcClaims, isAdmin bool) (*model.User, error) {
 	randomPassword, err := model.GenPassword()
 	if err != nil {
-		log.Error("[oidc] failed to generate password for provisioning: ", err)
+		log.Error("[oidc] failed to generate password for provisioning")
 		return nil, err
 	}
 
 	user, err := model.NewUser(userKey, randomPassword)
 	if err != nil {
-		log.Error("[oidc] failed to build user: ", err)
+		log.Error("[oidc] failed to build user")
 		return nil, err
 	}
 	// NewUser keeps the legacy native sanitizer. Override its identifier with
@@ -287,8 +415,8 @@ func (app *ReactAppWrapper) provisionNewUser(userKey string, claims oidcClaims, 
 	// including provider usernames containing a hyphen.
 	user.ID = userKey
 	user.Email = userKey
-	if email := strings.TrimSpace(claims.Email); email != "" {
-		user.Email = model.NormalizeUserID(email)
+	if email := claims.Email; email != "" {
+		user.Email = email
 		user.EmailVerified = claimIsTrue(claims.EmailVerified)
 	}
 
@@ -309,7 +437,7 @@ func (app *ReactAppWrapper) provisionNewUser(userKey string, claims oidcClaims, 
 	user.IsAdmin = isAdmin
 
 	if err := app.userStorer.RegisterUser(user); err != nil {
-		log.Error("[oidc] failed to register provisioned user: ", err)
+		log.Error("[oidc] failed to register provisioned user")
 		return nil, err
 	}
 
@@ -324,11 +452,11 @@ func (app *ReactAppWrapper) getOrProvisionUser(userKey string, identity oidcUser
 	user, err := app.userStorer.GetUser(userKey)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			log.Error("[oidc] storage error looking up user: ", err)
+			log.Error("[oidc] storage error looking up user")
 			return nil, err
 		}
 		if !app.cfg.RegistrationOpen {
-			log.Warn("[oidc] refused to provision ", userKey, " while registration is closed")
+			log.Warn("[oidc] refused to provision while registration is closed")
 			return nil, errOIDCRegistrationClosed
 		}
 		// User not found — provision new user
@@ -337,7 +465,7 @@ func (app *ReactAppWrapper) getOrProvisionUser(userKey string, identity oidcUser
 		if err != nil {
 			return nil, err
 		}
-		log.Info("[oidc] provisioned new user: ", userKey, " (claim=\"", identity.ClaimName, "\", value=\"", identity.Value, "\") admin=", isAdmin)
+		log.Info("[oidc] provisioned new user")
 		return newUser, nil
 	}
 
@@ -346,10 +474,10 @@ func (app *ReactAppWrapper) getOrProvisionUser(userKey string, identity oidcUser
 	if adminStatus != nil && user.IsAdmin != *adminStatus {
 		user.IsAdmin = *adminStatus
 		if err := app.userStorer.UpdateUser(user); err != nil {
-			log.Error("[oidc] failed to update user admin status: ", err)
+			log.Error("[oidc] failed to update user admin status")
 			return nil, err
 		}
-		log.Info("[oidc] updated admin status for ", userKey, " to ", *adminStatus)
+		log.Info("[oidc] updated admin status")
 	}
 
 	return user, nil
@@ -364,26 +492,25 @@ func (app *ReactAppWrapper) completeOIDCLogin(c *gin.Context, rawClaims map[stri
 	if err != nil {
 		switch {
 		case errors.Is(err, errNoUserID):
-			log.Warn("[oidc] no userid available: configured claim '", identity.ClaimName, "' not found or empty")
+			log.Warn("[oidc] configured userid claim not found or empty")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "userid claim not found or empty"})
+		case errors.Is(err, errInvalidUserID):
+			log.Warn("[oidc] configured userid claim is not a safe user identifier")
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "userid claim is not a safe user identifier"})
 		case errors.Is(err, errEmailNotVerified):
-			log.Warn("[oidc] rejected login: email not verified for ", identity.Value)
+			log.Warn("[oidc] rejected login: email not verified")
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "email not verified"})
 		default:
-			log.Error("[oidc] resolveOIDCIdentity error: ", err)
+			log.Error("[oidc] could not resolve provider identity")
 			c.AbortWithStatus(http.StatusInternalServerError)
 		}
 		return
 	}
 
-	// The stored user id is the sanitized userid; use the same key for lookup and
-	// provisioning so subsequent logins resolve to the same account.
-	userKey := model.NormalizeUserID(identity.Value)
-	if userKey == "" {
-		log.Warn("[oidc] the claim ", identity.ClaimName, " holds no usable userid")
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "userid claim not usable"})
-		return
-	}
+	// The identity is already validated without rewriting it; use the exact
+	// provider value for lookup and provisioning so distinct identities cannot
+	// collapse onto the same local account.
+	userKey := identity.Value
 
 	// Determine admin solely from the configured role claim; re-evaluated on every login
 	adminStatus := app.evaluateOIDCAdminStatus(rawClaims)
@@ -401,7 +528,7 @@ func (app *ReactAppWrapper) completeOIDCLogin(c *gin.Context, rawClaims map[stri
 
 	// Issue session and redirect to success page
 	if _, err := app.issueWebSession(c, user); err != nil {
-		log.Error("[oidc] failed to issue session: ", err)
+		log.Error("[oidc] failed to issue session")
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
@@ -417,7 +544,7 @@ func (app *ReactAppWrapper) oidcCallback(c *gin.Context) {
 
 	// Provider-side error — sanitize before returning to client
 	if errParam := c.Query("error"); errParam != "" {
-		log.Warn("[oidc] provider error: ", errParam, " — ", c.Query("error_description"))
+		log.Warn("[oidc] provider returned an authentication error")
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authentication failed at identity provider"})
 		return
 	}
@@ -463,6 +590,27 @@ func (app *ReactAppWrapper) oidcCallback(c *gin.Context) {
 	}
 
 	app.completeOIDCLogin(c, rawClaims, claims)
+}
+
+type publicAuthConfig struct {
+	OIDCEnabled       bool   `json:"oidc_enabled"`
+	OIDCLoginURL      string `json:"oidc_login_url,omitempty"`
+	OIDCDisplayName   string `json:"oidc_display_name,omitempty"`
+	LocalLoginEnabled bool   `json:"local_login_enabled"`
+}
+
+// authConfigHandler exposes only the public choices needed to render the login
+// page. Client secrets and provider metadata stay server-side.
+func (app *ReactAppWrapper) authConfigHandler(c *gin.Context) {
+	response := publicAuthConfig{
+		OIDCEnabled:       app.cfg.OIDC.Enabled(),
+		LocalLoginEnabled: app.cfg.OIDC.LocalLoginEnabled(),
+	}
+	if response.OIDCEnabled {
+		response.OIDCLoginURL = "/ui/api/oidc/login"
+		response.OIDCDisplayName = app.cfg.OIDC.LoginDisplayName()
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // meHandler returns the current authenticated user's profile as JSON.
