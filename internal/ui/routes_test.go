@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/ddvk/rmfakecloud/internal/config"
+	log "github.com/sirupsen/logrus"
 )
 
 func uiRouteConfig() *config.Config {
@@ -120,5 +122,22 @@ func TestOIDCProviderFailureIsRequestScoped(t *testing.T) {
 	response = requestUI(t, router, http.MethodPost, "/ui/api/login", nil)
 	if response.Code == http.StatusNotFound {
 		t.Fatal("native login route disappeared after provider failure")
+	}
+}
+
+func TestUnknownOIDCCallbackDoesNotLogOAuthQuery(t *testing.T) {
+	var output bytes.Buffer
+	previousOutput := log.StandardLogger().Out
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
+	log.SetOutput(&output)
+
+	app := testUIApp(uiRouteConfig(), newFakeUserStorer())
+	router := routerForUIApp(t, app)
+	request := requestUI(t, router, http.MethodPost, oidcCallbackPath+"?code=oauth-code-secret&state=oauth-state-secret", nil)
+	if request.Code != http.StatusNotFound {
+		t.Fatalf("unknown callback method returned %d, want 404", request.Code)
+	}
+	if strings.Contains(output.String(), "oauth-code-secret") || strings.Contains(output.String(), "oauth-state-secret") {
+		t.Fatalf("unknown callback request leaked OAuth query: %s", output.String())
 	}
 }

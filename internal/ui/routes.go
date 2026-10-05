@@ -8,6 +8,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const oidcCallbackPath = "/ui/api/oidc/callback"
+
 // RegisterRoutes the apps routes
 func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	router.StaticFS(app.prefix, app)
@@ -22,7 +24,9 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	//hack for index.html
 	router.NoRoute(func(c *gin.Context) {
 		uri := c.Request.RequestURI
-		log.Info(uri)
+		if c.Request.URL.Path != oidcCallbackPath {
+			log.Info(uri)
+		}
 		if strings.HasPrefix(uri, "/api") ||
 			strings.HasPrefix(uri, "/ui/api") ||
 			c.Request.Method != http.MethodGet {
