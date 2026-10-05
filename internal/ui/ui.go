@@ -5,8 +5,10 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"sync"
 	"time"
 
+	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/ddvk/rmfakecloud/internal/app/hub"
 	"github.com/ddvk/rmfakecloud/internal/app/passcodestore"
 	"github.com/ddvk/rmfakecloud/internal/common"
@@ -18,6 +20,7 @@ import (
 	"github.com/ddvk/rmfakecloud/internal/ui/viewmodel"
 	webui "github.com/ddvk/rmfakecloud/ui"
 	"github.com/gin-gonic/gin"
+	"golang.org/x/oauth2"
 )
 
 type backend interface {
@@ -67,16 +70,20 @@ type mqttBridge interface {
 
 // ReactAppWrapper encapsulates an app
 type ReactAppWrapper struct {
-	fs            http.FileSystem
-	prefix        string
-	cfg           *config.Config
-	userStorer    storage.UserStorer
-	codeConnector codeGenerator
-	h             *hub.Hub
-	passcodeStore passcodestore.Store
-	backends      map[common.SyncVersion]backend
-	roomManager   *screenshare.RoomManager
-	mqtt          mqttBridge
+	fs             http.FileSystem
+	prefix         string
+	cfg            *config.Config
+	userStorer     storage.UserStorer
+	codeConnector  codeGenerator
+	h              *hub.Hub
+	passcodeStore  passcodestore.Store
+	backends       map[common.SyncVersion]backend
+	roomManager    *screenshare.RoomManager
+	mqtt           mqttBridge
+	oidcProvider   *gooidc.Provider
+	oauth2Config   oauth2.Config
+	oidcHTTPClient *http.Client
+	oidcMu         sync.RWMutex
 }
 
 // hack for serving index.html on /
@@ -121,6 +128,7 @@ func New(cfg *config.Config,
 		roomManager: roomManager,
 		mqtt:        mqttBroker,
 	}
+
 	return &staticWrapper
 }
 
@@ -136,6 +144,11 @@ func (w ReactAppWrapper) Open(filepath string) (http.File, error) {
 	f, err := w.fs.Open(fullpath)
 	return f, err
 }
+
+func (app *ReactAppWrapper) serveIndex(c *gin.Context) {
+	c.FileFromFS("/index.html", app.fs)
+}
+
 func badReq(c *gin.Context, message string) {
 	c.AbortWithStatusJSON(http.StatusBadRequest, viewmodel.NewErrorResponse(message))
 }

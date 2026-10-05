@@ -1,5 +1,4 @@
 import constants from "../common/constants";
-import { jwtDecode } from "jwt-decode";
 
 class ApiServices {
   header() {
@@ -14,6 +13,17 @@ class ApiServices {
       }).then(handleError);
     }
   }
+  authConfig() {
+    return fetch(`${constants.ROOT_URL}/auth/config`, {
+      method: "GET",
+      headers: this.header(),
+    }).then((r) => {
+      if (!r.ok) {
+        throw new Error(r.statusText);
+      }
+      return r.json();
+    });
+  }
   login(loginData) {
     return fetch(`${constants.ROOT_URL}/login`, {
       method: "POST",
@@ -24,18 +34,31 @@ class ApiServices {
         if (!r.ok) {
           throw new Error(r.statusText);
         }
-        return r.text();
       })
-      .then((text) => {
-        let user = jwtDecode(text);
-        localStorage.setItem("currentUser", JSON.stringify(user));
-        localStorage.setItem("authToken", text);
-        return user;
-      });
+      .then(() => this.me());
   }
   logout() {
     removeUser();
     fetch(`${constants.ROOT_URL}/logout`);
+  }
+
+  me() {
+    return fetch(`${constants.ROOT_URL}/me`, {
+      method: "GET",
+      headers: this.header(),
+    }).then((r) => {
+      if (r.status === 401) {
+        removeUser();
+        throw new Error("Not authenticated");
+      }
+      if (!r.ok) {
+        throw new Error(r.statusText);
+      }
+      return r.json();
+    }).then((user) => {
+      localStorage.setItem("currentUser", JSON.stringify(user));
+      return user;
+    });
   }
 
   upload(parent, files) {
@@ -206,7 +229,6 @@ class ApiServices {
 
 function removeUser(){
   localStorage.removeItem("currentUser");
-  localStorage.removeItem("authToken");
 }
 function handleError(r) {
   if (!r.ok) {

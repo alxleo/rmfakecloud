@@ -1,3 +1,0 @@
-quiery-filters:
-    - exclude:
-        id: go/log-injection 

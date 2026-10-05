@@ -130,6 +130,19 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 		return
 	}
 
+	tokenString, err := app.issueWebSession(c, user)
+	if err != nil {
+		log.Error(err)
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.String(http.StatusOK, tokenString)
+}
+
+// issueWebSession builds a WebUserClaims JWT for user, sets the auth cookie, and
+// returns the signed token string. It is the sole place expiry, scopes, and cookie
+// attributes are defined for UI sessions — shared by password login and OIDC login.
+func (app *ReactAppWrapper) issueWebSession(c *gin.Context, user *model.User) (string, error) {
 	scopes := ""
 	if user.Sync15 {
 		scopes = isSync15Key
@@ -154,17 +167,14 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 	}
 
 	tokenString, err := common.SignClaims(claims, app.cfg.JWTSecretKey)
-
 	if err != nil {
-		log.Error(err)
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
+		return "", err
 	}
+
 	log.Debug("cookie expires after: ", expiresAfter)
 	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(cookieName, tokenString, int(expiresAfter.Seconds()), "/", "", app.cfg.HTTPSCookie, true)
-
-	c.String(http.StatusOK, tokenString)
+	return tokenString, nil
 }
 
 func (app *ReactAppWrapper) changePassword(c *gin.Context) {
@@ -893,4 +903,3 @@ func (app *ReactAppWrapper) screenshareDeleteRoom(c *gin.Context) {
 	app.roomManager.DeleteAllForUser(uid)
 	c.Status(http.StatusNoContent)
 }
-

@@ -65,6 +65,10 @@ var dontLogBody = map[string]bool{
 
 func requestLoggerMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.Request.URL.Path == oidcCallbackPath {
+			c.Next()
+			return
+		}
 
 		if log.IsLevelEnabled(log.TraceLevel) {
 			var str bytes.Buffer

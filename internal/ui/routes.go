@@ -8,6 +8,8 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const oidcCallbackPath = "/ui/api/oidc/callback"
+
 // RegisterRoutes the apps routes
 func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	router.StaticFS(app.prefix, app)
@@ -22,7 +24,9 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	//hack for index.html
 	router.NoRoute(func(c *gin.Context) {
 		uri := c.Request.RequestURI
-		log.Info(uri)
+		if c.Request.URL.Path != oidcCallbackPath {
+			log.Info(uri)
+		}
 		if strings.HasPrefix(uri, "/api") ||
 			strings.HasPrefix(uri, "/ui/api") ||
 			c.Request.Method != http.MethodGet {
@@ -31,12 +35,28 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 			return
 		}
 
-		c.FileFromFS(indexReplacement, app)
+		// OIDC deployments: redirect unauthenticated users straight to the IdP.
+		// /oidc-success is excluded to avoid a redirect loop after callback.
+		if !app.cfg.OIDC.LocalLoginEnabled() &&
+			!strings.HasPrefix(uri, "/oidc-success") &&
+			!app.webAuthenticated(c) {
+			c.Redirect(http.StatusFound, "/ui/api/oidc/login")
+			return
+		}
+
+		app.serveIndex(c)
 	})
 
 	r := router.Group("/ui/api")
-	r.POST("register", app.register)
-	r.POST("login", app.login)
+	r.GET("auth/config", app.authConfigHandler)
+	if app.cfg.OIDC.Enabled() {
+		r.GET("oidc/login", app.oidcBegin)
+		r.GET("oidc/callback", app.oidcCallback)
+	}
+	if app.cfg.OIDC.LocalLoginEnabled() {
+		r.POST("register", app.register)
+		r.POST("login", app.login)
+	}
 	r.GET("logout", func(c *gin.Context) {
 		c.SetCookie(cookieName, "/", -1, "", "", false, true)
 		c.Status(http.StatusOK)
@@ -47,6 +67,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 	auth.HEAD("/", func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
+	auth.GET("me", app.meHandler)
 	auth.GET("sync", func(c *gin.Context) {
 		uid := userID(c)
 		br := c.GetString(browserIDContextKey)

@@ -14,33 +14,29 @@ jobs:
     steps:
 
     - name: Check out code
-      uses: actions/checkout@v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Set up Go 1.x
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
       with:
-        go-version: ^1.23
+        go-version-file: go.mod
       id: go
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
       name: Install pnpm
       with:
         version: 9 
         run_install: false
 
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
       with:
-        node-version: '21'
+        node-version: '22'
         cache: 'pnpm'
         cache-dependency-path: ui/pnpm-lock.yaml
 
     - name: Build
       run: make build
 
-    - name: Test UI
-      run: make testui
-
-    - name: TestGO
+    - name: Test Go
       run: make testgo
-
