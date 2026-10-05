@@ -128,6 +128,8 @@ func fixProviderName(n string) string {
 		return "Slack"
 	case FtpProvider:
 		fallthrough
+	case LocalfsProvider:
+		fallthrough
 	case DropboxProvider:
 		return "Dropbox"
 	case GoogleProvider:
@@ -148,6 +150,8 @@ func ProviderType(n string) string {
 	case SlackProvider:
 		return "Messaging"
 	case FtpProvider:
+		fallthrough
+	case LocalfsProvider:
 		fallthrough
 	case DropboxProvider:
 		fallthrough

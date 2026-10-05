@@ -15,6 +15,7 @@ import Home from "./pages/Home";
 import Connect from "./pages/Connect";
 import Documents from "./pages/Documents";
 import Integrations from "./pages/Integrations";
+import Returns from "./pages/Returns";
 import Profile from "./pages/Profile";
 import Admin from "./pages/Admin";
 import ScreenShare from "./pages/ScreenShare";
@@ -51,6 +52,7 @@ export default function App() {
                 <PrivateRoute path="/pair/app" component={Connect} />
                 <PrivateRoute path="/pair" component={Connect} />
                 <PrivateRoute path="/integrations" component={Integrations} />
+                <PrivateRoute path="/returns" component={Returns} />
                 <PrivateRoute path="/profile" component={Profile} />
                 <PrivateRoute path="/screenshare" component={ScreenShare} />
                 <PrivateRoute path="/admin" roles={[Role.Admin]} component={Admin} />
