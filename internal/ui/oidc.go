@@ -28,8 +28,9 @@ const (
 )
 
 var (
-	errNoUserID         = errors.New("no userid available: configured claim not found or empty")
-	errEmailNotVerified = errors.New("email not verified")
+	errNoUserID               = errors.New("no userid available: configured claim not found or empty")
+	errEmailNotVerified       = errors.New("email not verified")
+	errOIDCRegistrationClosed = errors.New("OIDC registration closed")
 )
 
 type oidcUserIdentity struct {
@@ -321,6 +322,10 @@ func (app *ReactAppWrapper) getOrProvisionUser(userKey string, identity oidcUser
 			log.Error("[oidc] storage error looking up user: ", err)
 			return nil, err
 		}
+		if !app.cfg.RegistrationOpen {
+			log.Warn("[oidc] refused to provision ", userKey, " while registration is closed")
+			return nil, errOIDCRegistrationClosed
+		}
 		// User not found — provision new user
 		var newUser *model.User
 		newUser, err = app.provisionNewUser(identity.Value, claims, isAdmin)
@@ -376,6 +381,10 @@ func (app *ReactAppWrapper) completeOIDCLogin(c *gin.Context, rawClaims map[stri
 	// Get or provision user (lookup existing, or create new)
 	user, err := app.getOrProvisionUser(userKey, identity, claims, adminStatus)
 	if err != nil {
+		if errors.Is(err, errOIDCRegistrationClosed) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "registration closed"})
+			return
+		}
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}

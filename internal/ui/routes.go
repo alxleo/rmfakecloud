@@ -33,7 +33,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 
 		// OIDC deployments: redirect unauthenticated users straight to the IdP.
 		// /oidc-success is excluded to avoid a redirect loop after callback.
-		if app.cfg.OIDC.Enabled() &&
+		if !app.cfg.OIDC.LocalLoginEnabled() &&
 			!strings.HasPrefix(uri, "/oidc-success") &&
 			!app.webAuthenticated(c) {
 			c.Redirect(http.StatusFound, "/ui/api/oidc/login")
@@ -48,7 +48,7 @@ func (app *ReactAppWrapper) RegisterRoutes(router *gin.Engine) {
 		r.GET("oidc/login", app.oidcBegin)
 		r.GET("oidc/callback", app.oidcCallback)
 	}
-	if !app.cfg.OIDC.Enabled() {
+	if app.cfg.OIDC.LocalLoginEnabled() {
 		r.POST("register", app.register)
 		r.POST("login", app.login)
 	}

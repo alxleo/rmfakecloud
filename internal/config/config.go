@@ -95,6 +95,7 @@ const (
 	EnvOIDCDisplayName          = "OIDC_DISPLAY_NAME"
 	EnvOIDCUserIDClaim          = "OIDC_USERID_CLAIM"
 	EnvOIDCAllowUnverifiedEmail = "OIDC_ALLOW_UNVERIFIED_EMAIL"
+	EnvOIDCDisableLocalLogin    = "OIDC_DISABLE_LOCAL_LOGIN"
 	DefaultOIDCUserIDClaim      = "preferred_username"
 )
 
@@ -127,22 +128,30 @@ type Config struct {
 
 // OIDCConfig holds all OIDC-related settings. The zero value means OIDC is disabled.
 type OIDCConfig struct {
-	ProviderURL  string
-	ClientID     string
-	ClientSecret string
-	RedirectURL  string
-	AdminClaim   string
+	ProviderURL          string
+	ClientID             string
+	ClientSecret         string
+	RedirectURL          string
+	AdminClaim           string
 	AdminClaimValue      string
 	ExtraScopes          []string
 	DisplayName          string
 	UserIDClaim          string
 	AllowUnverifiedEmail bool
+	DisableLocalLogin    bool
 }
 
 // Enabled returns true when all required OIDC fields are set.
 func (o *OIDCConfig) Enabled() bool {
 	return o.ProviderURL != "" && o.ClientID != "" &&
 		o.ClientSecret != "" && o.RedirectURL != ""
+}
+
+// LocalLoginEnabled reports whether password login and registration remain
+// available. The disable flag only has an effect when OIDC is configured, so
+// an incomplete or disabled OIDC configuration can never lock out all login.
+func (o *OIDCConfig) LocalLoginEnabled() bool {
+	return !o.Enabled() || !o.DisableLocalLogin
 }
 
 // partiallyConfigured detects any OIDC env var set without the full required set.
@@ -335,6 +344,7 @@ func FromEnv() *Config {
 	}
 
 	oidcAllowUnverifiedEmail, _ := strconv.ParseBool(os.Getenv(EnvOIDCAllowUnverifiedEmail))
+	oidcDisableLocalLogin, _ := strconv.ParseBool(os.Getenv(EnvOIDCDisableLocalLogin))
 
 	// OIDCUserIDClaim is always set here; callers must not re-apply the default.
 	oidcUserIDClaim := os.Getenv(EnvOIDCUserIDClaim)
@@ -380,17 +390,18 @@ func FromEnv() *Config {
 		ICEServers:        iceServers,
 		HashSchemaVersion: hashSchemaVersion,
 		OIDC: OIDCConfig{
-			ProviderURL:  os.Getenv(EnvOIDCProviderURL),
-			ClientID:     os.Getenv(EnvOIDCClientID),
-			ClientSecret: os.Getenv(EnvOIDCClientSecret),
-			RedirectURL:  oidcRedirectURL,
-			AdminClaim:   os.Getenv(EnvOIDCAdminClaim),
-			AdminClaimValue:   os.Getenv(EnvOIDCAdminClaimValue),
-			ExtraScopes:       oidcExtraScopes,
-			DisplayName:       os.Getenv(EnvOIDCDisplayName),
+			ProviderURL:     os.Getenv(EnvOIDCProviderURL),
+			ClientID:        os.Getenv(EnvOIDCClientID),
+			ClientSecret:    os.Getenv(EnvOIDCClientSecret),
+			RedirectURL:     oidcRedirectURL,
+			AdminClaim:      os.Getenv(EnvOIDCAdminClaim),
+			AdminClaimValue: os.Getenv(EnvOIDCAdminClaimValue),
+			ExtraScopes:     oidcExtraScopes,
+			DisplayName:     os.Getenv(EnvOIDCDisplayName),
 			// OIDCUserIDClaim is always set here; callers must not re-apply the default.
 			UserIDClaim:          oidcUserIDClaim,
 			AllowUnverifiedEmail: oidcAllowUnverifiedEmail,
+			DisableLocalLogin:    oidcDisableLocalLogin,
 		},
 	}
 	return &cfg
@@ -450,6 +461,7 @@ OIDC authentication (optional, Authorization Code + PKCE):
 	%s		space-separated extra OAuth2 scopes to request
 	%s		custom label for the OIDC login button (default: "Login with OIDC")
 	%s	allow login when email_verified is missing/false (default: false, insecure)
+	%s	disable password login and local registration when OIDC is enabled (default: false)
 	note: %s must be set to true when OIDC is enabled
 `,
 		envJWTSecretKey,
@@ -494,6 +506,7 @@ OIDC authentication (optional, Authorization Code + PKCE):
 		EnvOIDCExtraScopes,
 		EnvOIDCDisplayName,
 		EnvOIDCAllowUnverifiedEmail,
+		EnvOIDCDisableLocalLogin,
 		envHTTPSCookie,
 	)
 }
