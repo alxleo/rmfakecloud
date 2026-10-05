@@ -146,7 +146,7 @@ func (w ReactAppWrapper) Open(filepath string) (http.File, error) {
 }
 
 func (app *ReactAppWrapper) serveIndex(c *gin.Context) {
-	c.FileFromFS("/index.html", app.fs)
+	c.FileFromFS(indexReplacement, app)
 }
 
 func badReq(c *gin.Context, message string) {
