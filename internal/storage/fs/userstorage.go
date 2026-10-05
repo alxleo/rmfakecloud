@@ -8,7 +8,6 @@ import (
 
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/model"
-	"github.com/ddvk/rmfakecloud/internal/storage"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -41,9 +40,6 @@ func (fs *FileSystemStorage) GetUser(uid string) (user *model.User, err error) {
 	profilePath := fs.getPathFromUser(uid, profileName)
 	_, err = os.Stat(profilePath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, storage.ErrUserNotFound
-		}
 		return
 	}
 

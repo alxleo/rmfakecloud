@@ -7,11 +7,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"github.com/ddvk/rmfakecloud/internal/model"
-	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/gin-gonic/gin"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
@@ -270,18 +270,23 @@ func (app *ReactAppWrapper) evaluateOIDCAdminStatus(rawClaims map[string]any) *b
 }
 
 // provisionNewUser creates and registers a new OIDC-provisioned user.
-func (app *ReactAppWrapper) provisionNewUser(userIDValue string, claims oidcClaims, isAdmin bool) (*model.User, error) {
+func (app *ReactAppWrapper) provisionNewUser(userKey string, claims oidcClaims, isAdmin bool) (*model.User, error) {
 	randomPassword, err := model.GenPassword()
 	if err != nil {
 		log.Error("[oidc] failed to generate password for provisioning: ", err)
 		return nil, err
 	}
 
-	user, err := model.NewUser(userIDValue, randomPassword)
+	user, err := model.NewUser(userKey, randomPassword)
 	if err != nil {
 		log.Error("[oidc] failed to build user: ", err)
 		return nil, err
 	}
+	// NewUser keeps the legacy native sanitizer. Override its identifier with
+	// the OIDC key used for lookup so provisioning and filesystem paths agree,
+	// including provider usernames containing a hyphen.
+	user.ID = userKey
+	user.Email = userKey
 	if email := strings.TrimSpace(claims.Email); email != "" {
 		user.Email = model.NormalizeUserID(email)
 		user.EmailVerified = claimIsTrue(claims.EmailVerified)
@@ -318,7 +323,7 @@ func (app *ReactAppWrapper) getOrProvisionUser(userKey string, identity oidcUser
 	isAdmin := adminStatus != nil && *adminStatus
 	user, err := app.userStorer.GetUser(userKey)
 	if err != nil {
-		if !errors.Is(err, storage.ErrUserNotFound) {
+		if !errors.Is(err, os.ErrNotExist) {
 			log.Error("[oidc] storage error looking up user: ", err)
 			return nil, err
 		}
@@ -328,7 +333,7 @@ func (app *ReactAppWrapper) getOrProvisionUser(userKey string, identity oidcUser
 		}
 		// User not found — provision new user
 		var newUser *model.User
-		newUser, err = app.provisionNewUser(identity.Value, claims, isAdmin)
+		newUser, err = app.provisionNewUser(userKey, claims, isAdmin)
 		if err != nil {
 			return nil, err
 		}
@@ -374,6 +379,11 @@ func (app *ReactAppWrapper) completeOIDCLogin(c *gin.Context, rawClaims map[stri
 	// The stored user id is the sanitized userid; use the same key for lookup and
 	// provisioning so subsequent logins resolve to the same account.
 	userKey := model.NormalizeUserID(identity.Value)
+	if userKey == "" {
+		log.Warn("[oidc] the claim ", identity.ClaimName, " holds no usable userid")
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "userid claim not usable"})
+		return
+	}
 
 	// Determine admin solely from the configured role claim; re-evaluated on every login
 	adminStatus := app.evaluateOIDCAdminStatus(rawClaims)

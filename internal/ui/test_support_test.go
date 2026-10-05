@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"testing/fstest"
 
@@ -38,9 +39,9 @@ func (s *fakeUserStorer) GetUsers() ([]*model.User, error) {
 }
 
 func (s *fakeUserStorer) GetUser(id string) (*model.User, error) {
-	user, ok := s.users[model.NormalizeUserID(id)]
+	user, ok := s.users[id]
 	if !ok {
-		return nil, storage.ErrUserNotFound
+		return nil, os.ErrNotExist
 	}
 	return user, nil
 }

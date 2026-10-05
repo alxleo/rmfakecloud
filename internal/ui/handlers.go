@@ -63,14 +63,13 @@ func (app *ReactAppWrapper) register(c *gin.Context) {
 	}
 
 	// Check this user doesn't already exist
-	email := model.NormalizeUserID(form.Email)
-	_, err := app.userStorer.GetUser(email)
+	_, err := app.userStorer.GetUser(form.Email)
 	if err == nil {
 		badReq(c, "already taken")
 		return
 	}
 
-	user, err := model.NewUser(email, form.Password)
+	user, err := model.NewUser(form.Email, form.Password)
 	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -97,7 +96,7 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 	// not really thread safe
 	if app.cfg.CreateFirstUser {
 		log.Info("Creating an admin user")
-		user, err := model.NewUser(model.NormalizeUserID(form.Email), form.Password)
+		user, err := model.NewUser(form.Email, form.Password)
 		if err != nil {
 			log.Error("[login]", err)
 			c.AbortWithStatus(http.StatusInternalServerError)
@@ -114,7 +113,7 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 	}
 
 	// Try to find the user
-	user, err := app.userStorer.GetUser(model.NormalizeUserID(form.Email))
+	user, err := app.userStorer.GetUser(form.Email)
 	if err != nil {
 		log.Error(uiLogger, err, " cannot load user, login failed ip: ", c.ClientIP())
 		c.AbortWithStatus(http.StatusUnauthorized)
@@ -131,12 +130,13 @@ func (app *ReactAppWrapper) login(c *gin.Context) {
 		return
 	}
 
-	if _, err := app.issueWebSession(c, user); err != nil {
+	tokenString, err := app.issueWebSession(c, user)
+	if err != nil {
 		log.Error(err)
 		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	c.Status(http.StatusOK)
+	c.String(http.StatusOK, tokenString)
 }
 
 // issueWebSession builds a WebUserClaims JWT for user, sets the auth cookie, and
@@ -171,6 +171,7 @@ func (app *ReactAppWrapper) issueWebSession(c *gin.Context, user *model.User) (s
 		return "", err
 	}
 
+	log.Debug("cookie expires after: ", expiresAfter)
 	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(cookieName, tokenString, int(expiresAfter.Seconds()), "/", "", app.cfg.HTTPSCookie, true)
 	return tokenString, nil
@@ -902,4 +903,3 @@ func (app *ReactAppWrapper) screenshareDeleteRoom(c *gin.Context) {
 	app.roomManager.DeleteAllForUser(uid)
 	c.Status(http.StatusNoContent)
 }
-

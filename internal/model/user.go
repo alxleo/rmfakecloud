@@ -125,13 +125,6 @@ func sanitizeEmail(email string) string {
 	return emailWhiteList.ReplaceAllString(email, "")
 }
 
-// NormalizeUserID returns the canonical user key for any identifier (email, username, sub, etc.):
-// lowercase, trim whitespace, then strip characters outside [a-zA-Z0-9.@\-_].
-// Use this for both storing and looking up user IDs so they are always consistent.
-func NormalizeUserID(id string) string {
-	return sanitizeEmail(strings.ToLower(strings.TrimSpace(id)))
-}
-
 // NewUser create a new user object
 func NewUser(userID string, rawPassword string) (*User, error) {
 	password, err := hashPassword(rawPassword)
@@ -139,7 +132,7 @@ func NewUser(userID string, rawPassword string) (*User, error) {
 		return nil, err
 	}
 
-	sanitizedID := NormalizeUserID(userID)
+	sanitizedID := sanitizeEmail(userID)
 	return &User{
 		ID:            sanitizedID,
 		Email:         sanitizedID,

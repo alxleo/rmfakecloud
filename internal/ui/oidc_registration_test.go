@@ -4,12 +4,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/model"
-	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,7 +27,7 @@ func TestOIDCRejectsUnknownUserWhenRegistrationIsClosed(t *testing.T) {
 	if len(storer.registered) != 0 {
 		t.Fatal("closed registration provisioned an account")
 	}
-	if _, err := storer.GetUser("newcomer"); !errors.Is(err, storage.ErrUserNotFound) {
+	if _, err := storer.GetUser("newcomer"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("closed registration created an account: %v", err)
 	}
 }
@@ -73,8 +74,29 @@ func TestOIDCProvisioningOccursWhenRegistrationIsOpen(t *testing.T) {
 	}
 }
 
+func TestOIDCProvisioningStoresTheNormalizedHyphenatedKey(t *testing.T) {
+	storer := newFakeUserStorer()
+	app := testUIApp(&config.Config{
+		OIDC:             oidcOn(),
+		RegistrationOpen: true,
+	}, storer)
+	identity := oidcUserIdentity{Value: "Jean-Luc", ClaimName: "preferred_username"}
+
+	user, err := app.getOrProvisionUser("jean-luc", identity, oidcClaims{}, nil)
+
+	if err != nil {
+		t.Fatalf("hyphenated OIDC identity was rejected: %v", err)
+	}
+	if user.ID != "jean-luc" {
+		t.Fatalf("provisioned ID = %q, want jean-luc", user.ID)
+	}
+	if got, err := storer.GetUser("jean-luc"); err != nil || got != user {
+		t.Fatalf("normalized filesystem key was not stored: user=%#v err=%v", got, err)
+	}
+}
+
 func TestOIDCExistingAdminRemainsUsableWhenRegistrationIsClosed(t *testing.T) {
-	user, err := model.NewUser(" Alex ", "hunter2")
+	user, err := model.NewUser("alex", "hunter2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +118,8 @@ func TestOIDCExistingAdminRemainsUsableWhenRegistrationIsClosed(t *testing.T) {
 	}
 }
 
-func TestNativePasswordLoginStillNormalizesExistingUser(t *testing.T) {
-	user, err := model.NewUser(" Alex ", "hunter2")
+func TestNativePasswordLoginPreservesMixedCaseUserAndReturnsToken(t *testing.T) {
+	user, err := model.NewUser("MiXeDUser", "hunter2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,11 +130,22 @@ func TestNativePasswordLoginStillNormalizesExistingUser(t *testing.T) {
 	}, storer)
 	router := routerForUIApp(t, app)
 
-	response := requestUI(t, router, http.MethodPost, "/ui/api/login", strings.NewReader(`{"email":" ALEX ","password":"hunter2"}`))
+	response := requestUI(t, router, http.MethodPost, "/ui/api/login", strings.NewReader(`{"email":"MiXeDUser","password":"hunter2"}`))
 	if response.Code != http.StatusOK {
 		t.Fatalf("native login returned %d, want 200", response.Code)
 	}
 	if response.Header().Get("Set-Cookie") == "" {
 		t.Fatal("native login did not issue a session")
+	}
+	token := strings.TrimSpace(response.Body.String())
+	if token == "" {
+		t.Fatal("native login returned an empty token body")
+	}
+	claims := &WebUserClaims{}
+	if err := common.ClaimsFromToken(claims, token, app.cfg.JWTSecretKey); err != nil {
+		t.Fatalf("native login returned an invalid token: %v", err)
+	}
+	if claims.UserID != user.ID {
+		t.Fatalf("native token user ID = %q, want %q", claims.UserID, user.ID)
 	}
 }

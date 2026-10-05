@@ -3,12 +3,12 @@ package app
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/ddvk/rmfakecloud/internal/common"
 	"github.com/ddvk/rmfakecloud/internal/config"
 	"github.com/ddvk/rmfakecloud/internal/model"
-	"github.com/ddvk/rmfakecloud/internal/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 )
@@ -23,7 +23,7 @@ func (s *machineUserStorer) GetUsers() ([]*model.User, error) {
 
 func (s *machineUserStorer) GetUser(id string) (*model.User, error) {
 	if s.user == nil || s.user.ID != id {
-		return nil, storage.ErrUserNotFound
+		return nil, os.ErrNotExist
 	}
 	return s.user, nil
 }
