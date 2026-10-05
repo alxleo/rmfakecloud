@@ -13,13 +13,37 @@ const Login = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [authConfig, setAuthConfig] = useState(null);
+  const [authConfigStatus, setAuthConfigStatus] = useState("loading");
 
   const { state, dispatch } = useAuthState(); //read the values of loading and errorMessage from context
   const { errorMessage, loading } = state;
 
   useEffect(() => {
-    apiService.authConfig().then(setAuthConfig).catch(() => setAuthConfig(null));
+    let active = true;
+    apiService.authConfig()
+      .then((config) => {
+        if (!active) return;
+        setAuthConfig(config);
+        setAuthConfigStatus("ready");
+      })
+      .catch(() => {
+        if (active) setAuthConfigStatus("error");
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
+
+  useEffect(() => {
+    if (
+      authConfigStatus === "ready" &&
+      authConfig?.local_login_enabled !== true &&
+      authConfig?.oidc_login_url
+    ) {
+      window.location.assign(authConfig.oidc_login_url);
+    }
+  }, [authConfig, authConfigStatus]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -32,6 +56,25 @@ const Login = () => {
       console.log(error);
     }
   };
+
+  if (authConfigStatus !== "ready" || authConfig?.local_login_enabled !== true) {
+    let message = "Loading login options…";
+    if (authConfigStatus === "error") {
+      message = "Unable to load login options.";
+    } else if (authConfigStatus === "ready") {
+      message = authConfig?.oidc_login_url
+        ? "Redirecting to single sign-on…"
+        : "Single sign-on is not configured.";
+    }
+
+    return (
+      <div className={styles.container}>
+        <div className={styles.formContainer}>
+          <p>{message}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.container}>
