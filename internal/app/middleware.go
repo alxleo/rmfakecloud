@@ -84,7 +84,8 @@ func requestLoggerMiddleware() gin.HandlerFunc {
 			log.Traceln(requestLog, "headers: \n", str.String())
 		}
 
-		if _, ok := dontLogBody[c.Request.URL.Path]; ok {
+		_, privateBody := dontLogBody[c.Request.URL.Path]
+		if privateBody || (c.Request.Method == http.MethodPost && strings.HasPrefix(c.Request.URL.Path, "/integrations/")) {
 			c.Next()
 			return
 		}

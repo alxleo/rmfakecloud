@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"time"
 
@@ -781,7 +782,18 @@ func (app *ReactAppWrapper) downloadThroughIntegration(c *gin.Context) {
 
 	defer response.Close()
 
-	c.DataFromReader(http.StatusOK, size, "", response, nil)
+	metadata, err := integrationProvider.GetMetadata(fileid)
+	if err != nil {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	disposition := "inline"
+	if c.Query("download") == "true" {
+		disposition = "attachment"
+	}
+	c.Header("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": metadata.Name}))
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.DataFromReader(http.StatusOK, size, metadata.ProvidedFileType, response, nil)
 }
 
 func (app *ReactAppWrapper) screenshareJoinActive(c *gin.Context) {

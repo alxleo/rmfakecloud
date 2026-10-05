@@ -205,6 +205,16 @@ class ApiServices {
       return r.json();
     });
   }
+  exploreIntegration(id, path = "root") {
+    return fetch(`${constants.ROOT_URL}/integrations/${encodeURIComponent(id)}/explore/${encodeURIComponent(path)}`)
+      .then((r) => {
+        if (!r.ok) throw new Error("Could not load returned files. Try Refresh.");
+        return r.json();
+      });
+  }
+  integrationDownload(id, file, download = false) {
+    return `${constants.ROOT_URL}/integrations/${encodeURIComponent(id)}/download/${encodeURIComponent(file)}${download ? "?download=true" : ""}`;
+  }
   updateintegration(integration) {
     return fetch(`${constants.ROOT_URL}/integrations/${integration.id}`, {
       method: "PUT",

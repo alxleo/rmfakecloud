@@ -55,6 +55,17 @@ integrations:
     path: /some/path/with/files
 ```
 
+For a laptop return destination, use a dedicated directory for that user and add
+`preserveVersions: true` to its integration configuration. Name it **Laptop Returns**
+and create the directory before use. Paths and symbolic links are confined to the
+configured directory; this does not replace using separate directories for users.
+
+On the tablet, long-press a document, choose **Export**, then **Laptop Returns**.
+The tablet renders the PDF, including annotations. Open **Returns** in the web UI
+to open or download these exports, newest first. Earlier completed versions remain
+available, and interrupted uploads are not published. Normal document sync keeps
+the editable native data separately; exporting is the explicit return step.
+
 
 
 ## Messaging webhook

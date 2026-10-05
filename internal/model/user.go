@@ -78,8 +78,9 @@ type IntegrationConfig struct {
 	Accesstoken string `yaml:"accesstoken,omitempty"`
 
 	// Localfs
-	// really dangerous as it allows path traversal
 	Path string `yaml:"path,omitempty"`
+	// PreserveVersions keeps native exports separate from earlier copies.
+	PreserveVersions bool `yaml:"preserveVersions,omitempty"`
 
 	// Webhook
 	Endpoint string `yaml:"endpoint,omitempty"`

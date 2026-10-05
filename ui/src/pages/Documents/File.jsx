@@ -4,6 +4,7 @@ import Navbar from 'react-bootstrap/Navbar';
 import { FaChevronRight, FaChevronLeft, } from "react-icons/fa6";
 import { AiOutlineDownload } from "react-icons/ai";
 import constants from "../../common/constants";
+import { Link } from "react-router-dom";
 
 import apiservice from "../../services/api.service"
 import NameTag from "../../components/NameTag"
@@ -108,13 +109,17 @@ export default function FileViewer({ file, onSelect }) {
             <AiOutlineDownload />
           </Dropdown.Toggle>
           <Dropdown.Menu>
-            <Dropdown.Item onClick={onDownloadPdf}>Download PDF</Dropdown.Item>
+            <Dropdown.Item onClick={onDownloadPdf}>Download cloud PDF</Dropdown.Item>
             <Dropdown.Item onClick={onDownloadRmdoc}>Download .rmdoc</Dropdown.Item>
           </Dropdown.Menu>
         </Dropdown>
 
       </Navbar>
 
+      <p className="small text-muted mx-2">
+        This cloud preview and its PDF download may omit handwriting. For your annotated PDF,
+        export the document on your tablet to Laptop Returns, then open <Link to="/returns">Returns</Link>.
+      </p>
 
       {file && (
         <div ref={parent} style={{height: "95%"}}>
