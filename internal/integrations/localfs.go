@@ -83,7 +83,7 @@ func (d *localFS) List(folder string, depth int) (*messages.IntegrationFolder, e
 		response.Name = "LocalFS root"
 	}
 	err = visitDir("", path.Clean("/"+start), depth, response, func(name string) ([]fs.FileInfo, error) {
-		dir, err := root.Open(strings.TrimPrefix(name, "/"))
+		dir, err := root.Open(path.Clean(strings.TrimPrefix(name, "/")))
 		if err != nil {
 			return nil, err
 		}
